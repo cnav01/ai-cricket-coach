@@ -1,17 +1,16 @@
 import cv2
 import mediapipe as mp
 import numpy as np
+import pandas as pd
 import open3d as o3d
 import sys
 import os
 
-# This helps Python find the 'scripts' folder so we can import our other file
+# This helps Python find the 'scripts' folder
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-# --- IMPORTANT: We now import our tested angle calculator ---
+# Import our tested angle calculator
 from scripts.angle_calculator import calculate_angle
-
-# --- The rest of this is YOUR excellent code ---
 
 # Initialize MediaPipe Pose
 mp_pose = mp.solutions.pose
@@ -38,8 +37,7 @@ vis_3d.add_geometry(ground_plane)
 
 connections = mp_pose.POSE_CONNECTIONS
 
-# --- Video File Path ---
-# IMPORTANT: Make sure this video is in your 'videos' folder
+# Video File Path
 video_path = "videos/bowling.mp4" 
 cap = cv2.VideoCapture(video_path)
 
@@ -47,12 +45,16 @@ if not cap.isOpened():
     print(f"Error: Could not open video file: {video_path}")
     exit()
 
+analysis_data = []
+frame_number = 0
+
 while cap.isOpened():
     success, image = cap.read()
     if not success:
-        print("Video ended. Looping...")
-        cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-        continue
+        print("Video ended")
+        break # Exit loop if video ends, don't loop
+        #cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+        #continue
 
     image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
     results = pose.process(image_rgb)
@@ -81,6 +83,13 @@ while cap.isOpened():
         # We now call our tested, reusable function
         r_elbow_angle = calculate_angle(r_shoulder, r_elbow, r_wrist)
         l_elbow_angle = calculate_angle(l_shoulder, l_elbow, l_wrist)
+        
+        analysis_data.append({
+            "frame": frame_number,
+            "right_elbow_angle": r_elbow_angle,
+            "left_elbow_angle": l_elbow_angle
+        })
+
 
         # Display the angles on the 2D image
         landmarks_2d = results.pose_landmarks.landmark
@@ -116,6 +125,7 @@ while cap.isOpened():
     if not vis_3d.poll_events():
         break
     vis_3d.update_renderer()
+    frame_number += 1
 
     if cv2.waitKey(5) & 0xFF == ord('q'):
         break
@@ -124,3 +134,10 @@ cap.release()
 cv2.destroyAllWindows()
 vis_3d.destroy_window()
 pose.close()
+
+if analysis_data:
+    df = pd.DataFrame(analysis_data)
+    df.to_csv("output/angle_analysis.csv", index=False)
+    print("Angle analysis saved to output/angle_analysis.csv")
+else:
+    print("No pose data detected; no analysis saved.")
