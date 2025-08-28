@@ -38,7 +38,7 @@ vis_3d.add_geometry(ground_plane)
 connections = mp_pose.POSE_CONNECTIONS
 
 # Video File Path
-video_path = "videos/bowling.mp4" 
+video_path = "videos/bowling_2.mp4" 
 cap = cv2.VideoCapture(video_path)
 
 if not cap.isOpened():
@@ -79,15 +79,21 @@ while cap.isOpened():
         l_shoulder = [landmarks_3d[mp_pose.PoseLandmark.LEFT_SHOULDER.value].x, landmarks_3d[mp_pose.PoseLandmark.LEFT_SHOULDER.value].y, landmarks_3d[mp_pose.PoseLandmark.LEFT_SHOULDER.value].z]
         l_elbow = [landmarks_3d[mp_pose.PoseLandmark.LEFT_ELBOW.value].x, landmarks_3d[mp_pose.PoseLandmark.LEFT_ELBOW.value].y, landmarks_3d[mp_pose.PoseLandmark.LEFT_ELBOW.value].z]
         l_wrist = [landmarks_3d[mp_pose.PoseLandmark.LEFT_WRIST.value].x, landmarks_3d[mp_pose.PoseLandmark.LEFT_WRIST.value].y, landmarks_3d[mp_pose.PoseLandmark.LEFT_WRIST.value].z]
-
+        r_hip = [landmarks_3d[mp_pose.PoseLandmark.RIGHT_HIP.value].x, landmarks_3d[mp_pose.PoseLandmark.RIGHT_HIP.value].y, landmarks_3d[mp_pose.PoseLandmark.RIGHT_HIP.value].z]
+       
         # We now call our tested, reusable function
         r_elbow_angle = calculate_angle(r_shoulder, r_elbow, r_wrist)
         l_elbow_angle = calculate_angle(l_shoulder, l_elbow, l_wrist)
-        
+        r_shoulder_angle = calculate_angle(r_hip, r_shoulder, r_elbow)
+
         analysis_data.append({
             "frame": frame_number,
             "right_elbow_angle": r_elbow_angle,
-            "left_elbow_angle": l_elbow_angle
+            "left_elbow_angle": l_elbow_angle,
+            "right_shoulder_angle": r_shoulder_angle,
+            "r_wrist_x": r_wrist[0],
+            "r_wrist_y": r_wrist[1], 
+            "r_wrist_z": r_wrist[2]
         })
 
 
