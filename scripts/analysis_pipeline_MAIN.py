@@ -4,6 +4,7 @@ import numpy as np
 import cv2
 import os
 import mediapipe as mp
+import google.generativeai as genai
 
 # Import our angle calculator
 from scripts.angle_calculator import calculate_angle
@@ -139,72 +140,6 @@ def generate_comparison_report(user_csv_path, benchmark_csv_path, output_image_p
     print(f"SUCCESS: Comparison report saved to {output_image_path}")
     return True
 
-def generate_ai_feedback(user_csv_path, benchmark_csv_path):
-    """
-    Generates a comparative AI coaching report by analyzing both user and benchmark data.
-    """
-    def get_metrics_from_csv(csv_path):
-        if not os.path.exists(csv_path) or os.path.getsize(csv_path) == 0: return None
-        df = pd.read_csv(csv_path)
-        if df.empty: return None
-
-        window_size = 3
-        df['wrist_x_smooth'] = df['bowling_arm_wrist_x'].rolling(window=window_size, center=True).mean()
-        df['wrist_y_smooth'] = df['bowling_arm_wrist_y'].rolling(window=window_size, center=True).mean()
-        df['wrist_z_smooth'] = df['bowling_arm_wrist_z'].rolling(window=window_size, center=True).mean()
-        df['wrist_x_diff'] = df['wrist_x_smooth'].diff()
-        df['wrist_y_diff'] = df['wrist_y_smooth'].diff()
-        df['wrist_z_diff'] = df['wrist_z_smooth'].diff()
-        df['wrist_velocity'] = np.sqrt(df['wrist_x_diff']**2 + df['wrist_y_diff']**2 + df['wrist_z_diff']**2)
-        
-        if df['wrist_velocity'].isnull().all(): return None
-
-        release_frame_index = df['wrist_velocity'].idxmax()
-        pre_release_df = df[df['frame'] <= release_frame_index]
-        ffc_frame_index = pre_release_df['front_leg_brace_angle'].idxmin() if not pre_release_df.empty else release_frame_index
-
-        metrics = {
-            "elbow_angle_release": df.loc[release_frame_index, 'bowling_arm_elbow_angle'],
-            "shoulder_angle_release": df.loc[release_frame_index, 'bowling_arm_shoulder_angle'],
-            "brace_angle_ffc": df.loc[ffc_frame_index, 'front_leg_brace_angle']
-        }
-        return metrics
-
-    user_metrics = get_metrics_from_csv(user_csv_path)
-    benchmark_metrics = get_metrics_from_csv(benchmark_csv_path)
-
-    if not user_metrics or not benchmark_metrics:
-        return "Could not generate a comparative report. One or both analysis files are missing or empty."
-
-    report = "## AI Comparative Analysis Report\n\n"
-    report += "This report compares your key biomechanical markers against the professional benchmark.\n\n"
-    report += "| Metric | Your Performance | Pro Benchmark |\n"
-    report += "|:---|:---:|:---:|\n"
-    report += f"| Elbow Angle at Release | `{user_metrics['elbow_angle_release']:.1f}°` | `{benchmark_metrics['elbow_angle_release']:.1f}°` |\n"
-    report += f"| Shoulder Angle at Release | `{user_metrics['shoulder_angle_release']:.1f}°` | `{benchmark_metrics['shoulder_angle_release']:.1f}°` |\n"
-    report += f"| Front Leg Brace at Landing | `{user_metrics['brace_angle_ffc']:.1f}°` | `{benchmark_metrics['brace_angle_ffc']:.1f}°` |\n\n"
-    
-    report += "### Coaching Insights & Suggestions:\n\n"
-
-    # Elbow Angle Feedback
-    elbow_diff = user_metrics['elbow_angle_release'] - benchmark_metrics['elbow_angle_release']
-    if elbow_diff > 15:
-        report += "- **Elbow Position:** Your arm is significantly more bent at release than the pro's. This is a key area to work on to improve pace and efficiency. Focus on fully extending your arm and 'snapping' your wrist at the release point.\n"
-    elif elbow_diff > 5:
-        report += "- **Elbow Position:** Your arm is slightly more bent than the pro's at release. While this can be a stylistic difference, striving for a straighter arm like the benchmark can often unlock more speed.\n"
-    else:
-        report += "- **Elbow Position:** Excellent! Your arm extension at release is very similar to the professional benchmark, indicating an efficient energy transfer.\n"
-
-    # Front Leg Brace Feedback
-    brace_diff = user_metrics['brace_angle_ffc'] - benchmark_metrics['brace_angle_ffc']
-    if brace_diff < -15:
-        report += "- **Front Leg Brace:** Your front knee is collapsing much more than the pro's upon landing. This is a major power leak and increases injury risk. Focus on drills that strengthen your glutes and quads to maintain a firm, braced front leg.\n"
-    elif brace_diff < -5:
-        report += "- **Front Leg Brace:** Your front leg is slightly less braced than the benchmark. Ensuring a firm plant will help you rotate your upper body faster and more powerfully.\n"
-    else:
-        report += "- **Front Leg Brace:** Great work! You have a strong and stable front leg, very similar to the professional. This provides a solid foundation for your delivery.\n"
-        
-    return report
 
 def generate_annotated_video(video_path, csv_path, output_video_path, bowler_hand):
     """
@@ -219,13 +154,11 @@ def generate_annotated_video(video_path, csv_path, output_video_path, bowler_han
 
     frame_width, frame_height = int(cap.get(3)), int(cap.get(4))
     fps = cap.get(cv2.CAP_PROP_FPS)
-    if fps == 0 or fps > 60: fps = 30 
+    if fps == 0 or fps > 60: fps = 30 # Cap FPS for compatibility
     
-    # --- THE FIX IS HERE: Using a more compatible codec ---
-    fourcc = cv2.VideoWriter_fourcc(*'avc1')
+    fourcc = cv2.VideoWriter_fourcc(*'avc1') # Use a more compatible codec
     out = cv2.VideoWriter(output_video_path, fourcc, fps, (frame_width, frame_height))
 
-    # Add a check to ensure the VideoWriter was created successfully
     if not out.isOpened():
         print(f"Error: Failed to create VideoWriter for {output_video_path}")
         cap.release()
@@ -268,3 +201,73 @@ def generate_annotated_video(video_path, csv_path, output_video_path, bowler_han
     print(f"SUCCESS: 2D annotated video saved to {output_video_path}")
     return True
 
+# --- NEW: Generative AI Feedback Function ---
+def generate_generative_ai_feedback(user_csv_path, benchmark_csv_path, api_key):
+    """
+    Generates a comparative AI coaching report using the Gemini API.
+    """
+    try:
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel('gemini-1.5-flash')
+    except Exception as e:
+        return f"Error configuring Generative AI model: {e}"
+
+    def get_metrics_from_csv(csv_path):
+        if not os.path.exists(csv_path) or os.path.getsize(csv_path) == 0: return None
+        df = pd.read_csv(csv_path)
+        if df.empty: return None
+
+        window_size = 3
+        df['wrist_x_smooth'] = df['bowling_arm_wrist_x'].rolling(window=window_size, center=True).mean()
+        df['wrist_y_smooth'] = df['bowling_arm_wrist_y'].rolling(window=window_size, center=True).mean()
+        df['wrist_z_smooth'] = df['bowling_arm_wrist_z'].rolling(window=window_size, center=True).mean()
+        df['wrist_x_diff'] = df['wrist_x_smooth'].diff()
+        df['wrist_y_diff'] = df['wrist_y_smooth'].diff()
+        df['wrist_z_diff'] = df['wrist_z_smooth'].diff()
+        df['wrist_velocity'] = np.sqrt(df['wrist_x_diff']**2 + df['wrist_y_diff']**2 + df['wrist_z_diff']**2)
+        
+        if df['wrist_velocity'].isnull().all(): return None
+
+        release_frame_index = df['wrist_velocity'].idxmax()
+        pre_release_df = df[df['frame'] <= release_frame_index]
+        ffc_frame_index = pre_release_df['front_leg_brace_angle'].idxmin() if not pre_release_df.empty else release_frame_index
+
+        metrics = {
+            "elbow_angle_release": df.loc[release_frame_index, 'bowling_arm_elbow_angle'],
+            "shoulder_angle_release": df.loc[release_frame_index, 'bowling_arm_shoulder_angle'],
+            "brace_angle_ffc": df.loc[ffc_frame_index, 'front_leg_brace_angle']
+        }
+        return metrics
+
+    user_metrics = get_metrics_from_csv(user_csv_path)
+    benchmark_metrics = get_metrics_from_csv(benchmark_csv_path)
+
+    if not user_metrics or not benchmark_metrics:
+        return "Could not generate a comparative report. One or both analysis files are missing or empty."
+
+    # --- Create the Prompt for the AI ---
+    prompt = f"""
+    You are an elite cricket biomechanics coach. Analyze the following data comparing an amateur bowler to a professional benchmark and provide a detailed, encouraging, and actionable coaching report.
+
+    Here is the data, measured at critical moments in the bowling action:
+
+    | Metric                     | Amateur Bowler | Professional Benchmark |
+    |----------------------------|----------------|------------------------|
+    | Elbow Angle at Release     | {user_metrics['elbow_angle_release']:.1f}°      | {benchmark_metrics['elbow_angle_release']:.1f}°               |
+    | Shoulder Angle at Release  | {user_metrics['shoulder_angle_release']:.1f}°      | {benchmark_metrics['shoulder_angle_release']:.1f}°               |
+    | Front Leg Brace at Landing | {user_metrics['brace_angle_ffc']:.1f}°      | {benchmark_metrics['brace_angle_ffc']:.1f}°               |
+
+    Based on this data, please provide the following in Markdown format:
+    1.  **Overall Summary:** A brief, 1-2 sentence summary of the key differences.
+    2.  **Detailed Analysis:** A breakdown of each metric. For each, explain what the number means and compare the amateur's performance to the professional's.
+    3.  **Top Priority for Improvement:** Identify the single most important area the amateur should work on.
+    4.  **Suggested Drills:** Suggest one simple, actionable drill to help improve that top priority area.
+    """
+
+    try:
+        print("Sending data to Generative AI for analysis...")
+        response = model.generate_content(prompt)
+        print("SUCCESS: Received AI-generated report.")
+        return response.text
+    except Exception as e:
+        return f"Error communicating with the Generative AI model: {e}"

@@ -1,10 +1,10 @@
 import streamlit as st
 import os
 import time
-from scripts.analysis_pipeline_MAIN import (
+from scripts.analysis_pipeline_MAIN  import (
     process_video_to_csv,
     generate_comparison_report,
-    generate_ai_feedback,
+    generate_generative_ai_feedback, 
     generate_annotated_video
 )
 
@@ -34,7 +34,14 @@ with col2:
 
 # --- Analysis Button ---
 if st.button("Analyze Performance", type="primary"):
-    if user_video_file is not None and benchmark_video_file is not None:
+    # --- Securely get the API Key from secrets.toml ---
+    try:
+        api_key = st.secrets["GOOGLE_API_KEY"]
+    except KeyError:
+        st.error("API Key not found. Please create a .streamlit/secrets.toml file with your GOOGLE_API_KEY.")
+        st.stop()
+
+    if user_video_file and benchmark_video_file:
         
         output_dir = "output"
         os.makedirs(output_dir, exist_ok=True)
@@ -58,9 +65,8 @@ if st.button("Analyze Performance", type="primary"):
         progress_bar = st.progress(0)
         status_text = st.empty()
         
-        total_steps = 6 # Adjusted total steps
+        total_steps = 6
 
-        # --- Pipeline Execution ---
         status_text.text('Analyzing your video... (1/6)')
         process_video_to_csv(user_video_path, user_bowler_hand.lower(), user_csv_path)
         progress_bar.progress(1*100//total_steps)
@@ -81,8 +87,8 @@ if st.button("Analyze Performance", type="primary"):
         generate_comparison_report(user_csv_path, benchmark_csv_path, report_image_path)
         progress_bar.progress(5*100//total_steps)
         
-        status_text.text('Generating AI coaching report... (6/6)')
-        ai_report = generate_ai_feedback(user_csv_path, benchmark_csv_path)
+        status_text.text('Generating AI coaching report with Gemini... (6/6)')
+        ai_report = generate_generative_ai_feedback(user_csv_path, benchmark_csv_path, api_key)
         progress_bar.progress(6*100//total_steps)
         
         status_text.success("Analysis Complete!")
