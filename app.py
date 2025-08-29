@@ -1,17 +1,22 @@
 import streamlit as st
 import os
 import time
-from scripts.analysis_pipeline_MAIN import process_video_to_csv, generate_comparison_report, generate_ai_feedback
+from scripts.analysis_pipeline_MAIN import (
+    process_video_to_csv,
+    generate_comparison_report,
+    generate_ai_feedback,
+    generate_annotated_video
+)
 
 # --- Page Configuration ---
 st.set_page_config(
-    page_title="Spinvic AI Cricket Coach",
+    page_title="AI Cricket Coach",
     page_icon="🏏",
     layout="wide"
 )
 
 # --- App Title ---
-st.title("Spinvic AI Cricket Coach")
+st.title("AI Cricket Coach: Bowling Performance Lab 🏏")
 st.write("Upload your bowling video and a professional's video to get a data-driven biomechanical analysis.")
 
 # --- File & Parameter Setup in Columns ---
@@ -31,7 +36,6 @@ with col2:
 if st.button("Analyze Performance", type="primary"):
     if user_video_file is not None and benchmark_video_file is not None:
         
-        # Define file paths
         output_dir = "output"
         os.makedirs(output_dir, exist_ok=True)
         
@@ -42,33 +46,62 @@ if st.button("Analyze Performance", type="primary"):
         benchmark_csv_path = os.path.join(output_dir, "benchmark_analysis.csv")
         
         report_image_path = os.path.join(output_dir, "comparison_report.png")
+        user_annotated_video_path = os.path.join(output_dir, "user_annotated.mp4")
+        benchmark_annotated_video_path = os.path.join(output_dir, "benchmark_annotated.mp4")
 
-        # Save uploaded files
         with open(user_video_path, "wb") as f:
             f.write(user_video_file.getbuffer())
         with open(benchmark_video_path, "wb") as f:
             f.write(benchmark_video_file.getbuffer())
 
-        # --- Run Analysis Pipeline ---
-        with st.spinner('Analyzing your video... This may take a moment.'):
-            process_video_to_csv(user_video_path, user_bowler_hand, user_csv_path)
-        st.success("Your video analysis complete!")
+        st.subheader("Processing...")
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        total_steps = 6 # Adjusted total steps
 
-        with st.spinner('Analyzing the professional\'s video...'):
-            process_video_to_csv(benchmark_video_path, benchmark_bowler_hand, benchmark_csv_path)
-        st.success("Benchmark video analysis complete!")
+        # --- Pipeline Execution ---
+        status_text.text('Analyzing your video... (1/6)')
+        process_video_to_csv(user_video_path, user_bowler_hand.lower(), user_csv_path)
+        progress_bar.progress(1*100//total_steps)
+
+        status_text.text('Analyzing the professional\'s video... (2/6)')
+        process_video_to_csv(benchmark_video_path, benchmark_bowler_hand.lower(), benchmark_csv_path)
+        progress_bar.progress(2*100//total_steps)
+
+        status_text.text('Generating your annotated video... (3/6)')
+        generate_annotated_video(user_video_path, user_csv_path, user_annotated_video_path, user_bowler_hand.lower())
+        progress_bar.progress(3*100//total_steps)
         
-        with st.spinner('Generating comparison report...'):
-            generate_comparison_report(user_csv_path, benchmark_csv_path, report_image_path)
-        st.success("Comparison report generated!")
+        status_text.text('Generating benchmark annotated video... (4/6)')
+        generate_annotated_video(benchmark_video_path, benchmark_csv_path, benchmark_annotated_video_path, benchmark_bowler_hand.lower())
+        progress_bar.progress(4*100//total_steps)
         
-        with st.spinner('Generating AI coaching feedback...'):
-            ai_report = generate_ai_feedback(user_csv_path)
-        st.success("AI coaching report ready!")
+        status_text.text('Generating comparison plot... (5/6)')
+        generate_comparison_report(user_csv_path, benchmark_csv_path, report_image_path)
+        progress_bar.progress(5*100//total_steps)
+        
+        status_text.text('Generating AI coaching report... (6/6)')
+        ai_report = generate_ai_feedback(user_csv_path, benchmark_csv_path)
+        progress_bar.progress(6*100//total_steps)
+        
+        status_text.success("Analysis Complete!")
+        time.sleep(2)
+        progress_bar.empty()
+        status_text.empty()
 
         # --- Display Results ---
         st.header("Analysis Results")
         
+        st.subheader("Visual Analysis")
+        vid_col1, vid_col2 = st.columns(2)
+        with vid_col1:
+            st.markdown("#### Your Performance")
+            st.video(user_annotated_video_path)
+        with vid_col2:
+            st.markdown("#### Professional Benchmark")
+            st.video(benchmark_annotated_video_path)
+
         st.subheader("Performance Comparison Plot")
         st.image(report_image_path)
         
@@ -77,3 +110,4 @@ if st.button("Analyze Performance", type="primary"):
 
     else:
         st.error("Please upload both video files to proceed.")
+
