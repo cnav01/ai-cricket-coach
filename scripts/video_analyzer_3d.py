@@ -12,6 +12,10 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 # Import our tested angle calculator
 from scripts.angle_calculator import calculate_angle
 
+BOWLER_HAND = "right"
+video_path = "videos/pro_bowler.mp4" 
+output_csv_path = "output/pro_bowler_analysis.csv" # New output file
+
 # Initialize MediaPipe Pose
 mp_pose = mp.solutions.pose
 mp_drawing = mp.solutions.drawing_utils
@@ -38,7 +42,6 @@ vis_3d.add_geometry(ground_plane)
 connections = mp_pose.POSE_CONNECTIONS
 
 # Video File Path
-video_path = "videos/bowling_2.mp4" 
 cap = cv2.VideoCapture(video_path)
 
 if not cap.isOpened():
@@ -72,41 +75,46 @@ while cap.isOpened():
         landmarks_3d = results.pose_world_landmarks.landmark
 
         # --- Angle Calculation using our imported function ---
-        r_shoulder = [landmarks_3d[mp_pose.PoseLandmark.RIGHT_SHOULDER.value].x, landmarks_3d[mp_pose.PoseLandmark.RIGHT_SHOULDER.value].y, landmarks_3d[mp_pose.PoseLandmark.RIGHT_SHOULDER.value].z]
-        r_elbow = [landmarks_3d[mp_pose.PoseLandmark.RIGHT_ELBOW.value].x, landmarks_3d[mp_pose.PoseLandmark.RIGHT_ELBOW.value].y, landmarks_3d[mp_pose.PoseLandmark.RIGHT_ELBOW.value].z]
-        r_wrist = [landmarks_3d[mp_pose.PoseLandmark.RIGHT_WRIST.value].x, landmarks_3d[mp_pose.PoseLandmark.RIGHT_WRIST.value].y, landmarks_3d[mp_pose.PoseLandmark.RIGHT_WRIST.value].z]
+        if BOWLER_HAND == "right":
+            shoulder_lm = mp_pose.PoseLandmark.RIGHT_SHOULDER
+            elbow_lm = mp_pose.PoseLandmark.RIGHT_ELBOW
+            wrist_lm = mp_pose.PoseLandmark.RIGHT_WRIST
+            hip_lm = mp_pose.PoseLandmark.RIGHT_HIP
+        elif BOWLER_HAND == "left":
+            shoulder_lm = mp_pose.PoseLandmark.LEFT_SHOULDER
+            elbow_lm = mp_pose.PoseLandmark.LEFT_ELBOW
+            wrist_lm = mp_pose.PoseLandmark.LEFT_WRIST
+            hip_lm = mp_pose.PoseLandmark.LEFT_HIP
 
-        l_shoulder = [landmarks_3d[mp_pose.PoseLandmark.LEFT_SHOULDER.value].x, landmarks_3d[mp_pose.PoseLandmark.LEFT_SHOULDER.value].y, landmarks_3d[mp_pose.PoseLandmark.LEFT_SHOULDER.value].z]
-        l_elbow = [landmarks_3d[mp_pose.PoseLandmark.LEFT_ELBOW.value].x, landmarks_3d[mp_pose.PoseLandmark.LEFT_ELBOW.value].y, landmarks_3d[mp_pose.PoseLandmark.LEFT_ELBOW.value].z]
-        l_wrist = [landmarks_3d[mp_pose.PoseLandmark.LEFT_WRIST.value].x, landmarks_3d[mp_pose.PoseLandmark.LEFT_WRIST.value].y, landmarks_3d[mp_pose.PoseLandmark.LEFT_WRIST.value].z]
-        r_hip = [landmarks_3d[mp_pose.PoseLandmark.RIGHT_HIP.value].x, landmarks_3d[mp_pose.PoseLandmark.RIGHT_HIP.value].y, landmarks_3d[mp_pose.PoseLandmark.RIGHT_HIP.value].z]
-       
-        # We now call our tested, reusable function
-        r_elbow_angle = calculate_angle(r_shoulder, r_elbow, r_wrist)
-        l_elbow_angle = calculate_angle(l_shoulder, l_elbow, l_wrist)
-        r_shoulder_angle = calculate_angle(r_hip, r_shoulder, r_elbow)
+        # Extract the 3D coordinates using the dynamically set landmarks
+        shoulder_coords = [landmarks_3d[shoulder_lm.value].x, landmarks_3d[shoulder_lm.value].y, landmarks_3d[shoulder_lm.value].z]
+        elbow_coords = [landmarks_3d[elbow_lm.value].x, landmarks_3d[elbow_lm.value].y, landmarks_3d[elbow_lm.value].z]
+        wrist_coords = [landmarks_3d[wrist_lm.value].x, landmarks_3d[wrist_lm.value].y, landmarks_3d[wrist_lm.value].z]
+        hip_coords = [landmarks_3d[hip_lm.value].x, landmarks_3d[hip_lm.value].y, landmarks_3d[hip_lm.value].z]
+
+# Calculate the angles for the bowling arm
+        bowling_arm_elbow_angle = calculate_angle(shoulder_coords, elbow_coords, wrist_coords)
+        bowling_arm_shoulder_angle = calculate_angle(hip_coords, shoulder_coords, elbow_coords)
 
         analysis_data.append({
             "frame": frame_number,
-            "right_elbow_angle": r_elbow_angle,
-            "left_elbow_angle": l_elbow_angle,
-            "right_shoulder_angle": r_shoulder_angle,
-            "r_wrist_x": r_wrist[0],
-            "r_wrist_y": r_wrist[1], 
-            "r_wrist_z": r_wrist[2]
+            "bowling_arm_elbow_angle": bowling_arm_elbow_angle,
+            "bowling_arm_shoulder_angle": bowling_arm_shoulder_angle,
+            "bowling_arm_wrist_x": wrist_coords[0],
+            "bowling_arm_wrist_y": wrist_coords[1],
+            "bowling_arm_wrist_z": wrist_coords[2]
         })
 
 
         # Display the angles on the 2D image
         landmarks_2d = results.pose_landmarks.landmark
         image_h, image_w, _ = image.shape
-        right_elbow_2d = landmarks_2d[mp_pose.PoseLandmark.RIGHT_ELBOW]
-        left_elbow_2d = landmarks_2d[mp_pose.PoseLandmark.LEFT_ELBOW]
-        coordinates_elbow_r = (int(right_elbow_2d.x * image_w), int(right_elbow_2d.y * image_h))
-        coordinates_elbow_l = (int(left_elbow_2d.x * image_w), int(left_elbow_2d.y * image_h))
 
-        cv2.putText(image, str(int(r_elbow_angle)), coordinates_elbow_r, cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
-        cv2.putText(image, str(int(l_elbow_angle)), coordinates_elbow_l, cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+        elbow_2d = landmarks_2d[elbow_lm.value]
+        elbow_pixel_coords = (int(elbow_2d.x * image_w), int(elbow_2d.y * image_h))
+    
+        cv2.putText(image, str(int(bowling_arm_elbow_angle)), elbow_pixel_coords, 
+                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
         
         # --- 3D Visualization ---
         points_3d = np.array([[lm.x, -lm.y, -lm.z] for lm in landmarks_3d])
@@ -143,7 +151,7 @@ pose.close()
 
 if analysis_data:
     df = pd.DataFrame(analysis_data)
-    df.to_csv("output/angle_analysis.csv", index=False)
-    print("Angle analysis saved to output/angle_analysis.csv")
+    df.to_csv(output_csv_path, index=False)
+    print("Angle analysis saved to output/angle_analysis_5.csv")
 else:
     print("No pose data detected; no analysis saved.")
