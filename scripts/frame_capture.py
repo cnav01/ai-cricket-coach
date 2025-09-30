@@ -457,7 +457,7 @@ def generate_annotated_video(video_path, csv_path, output_video_path, bowler_han
     mp_drawing = mp.solutions.drawing_utils
     pose = mp_pose.Pose(static_image_mode=True, min_detection_confidence=0.5) # Using static_image_mode=True for drawing is fine
 
-    frame_number = 0
+    current_frame = 0
     while cap.isOpened():
         ret, frame = cap.read()
         if not ret: break
@@ -505,7 +505,7 @@ def generate_annotated_video(video_path, csv_path, output_video_path, bowler_han
         cv2.putText(frame, f"Frame: {current_frame}", (frame.shape[1] - 200, frame.shape[0] - 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2, cv2.LINE_AA)
         
         out.write(frame)
-        frame_number += 1
+        current_frame += 1
         
     cap.release(), out.release(), pose.close()
     print(f"SUCCESS: 2D annotated video saved to {output_video_path}")
