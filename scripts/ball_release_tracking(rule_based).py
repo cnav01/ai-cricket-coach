@@ -6,8 +6,8 @@ import collections
 import os
 
 # --- Configuration ---
-VIDEO_PATH = 'videos/bowling_neww.mp4' # Make sure this path is correct 
-SNAPSHOT_OUTPUT_DIR = 'output_snapshots' # Folder to save snapshots 
+VIDEO_PATH = 'videos/bowling_3.mp4' # Make sure this path is correct
+SNAPSHOT_OUTPUT_DIR = 'output_snapshots' # Folder to save snapshots
 SNAPSHOT_FILENAME_A = 'detected_arm_head_level_frame_A.jpg'
 SNAPSHOT_FILENAME_B = 'detected_strict_release_frame_B.jpg'
 
@@ -16,8 +16,19 @@ mp_pose = mp.solutions.pose
 pose = mp_pose.Pose(static_image_mode=False, min_detection_confidence=0.5, min_tracking_confidence=0.5)
 
 # --- Helper Function: Calculate Angle (2D) ---
-from scripts.angle_calculator import calculate_angle
-
+def calculate_angle_2d(a, b, c):
+    """Calculates angle in degrees between three 2D points (a,b,c with b as vertex)."""
+    a = np.array(a) # First point (e.g., shoulder)
+    b = np.array(b) # Mid point (e.g., elbow/knee)
+    c = np.array(c) # End point (e.g., wrist/ankle)
+    
+    radians = np.arctan2(c[1]-b[1], c[0]-b[0]) - np.arctan2(a[1]-b[1], a[0]-b[0])
+    angle = np.abs(radians*180.0/np.pi)
+    
+    if angle > 180.0:
+        angle = 360 - angle
+        
+    return angle
 
 # --- Helper Function: Calculate Angle with Vertical (3D) ---
 def calculate_arm_vertical_angle(shoulder_3d, wrist_3d):

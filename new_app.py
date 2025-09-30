@@ -1,122 +1,140 @@
 import streamlit as st
+import cv2
+import mediapipe as mp
+import numpy as np
+import pandas as pd
 import os
-import time
-from scripts.frame_capture import ( # Renamed to analysis_pipeline as it's the main version
-    process_video_to_csv,
-    generate_performance_graph, # Keep this for single video
-    generate_annotated_video,
-    generate_generative_ai_feedback # Now takes only user data
-)
+import matplotlib.pyplot as plt
+import google.generativeai as genai
+from PIL import Image
+import toml
 
-# --- Page Configuration ---
-st.set_page_config(
-    page_title="AI Cricket Coach",
-    page_icon="🏏",
-    layout="wide"
-)
+# ---- Import your pipeline helpers (you already have them in your script) ----
+# Place all the helper functions you provided (calculate_angle, find_arm_head_level_frame_A,
+# find_strict_release_frame_B, generate_performance_graph, generate_annotated_video,
+# generate_generative_ai_feedback, etc.) above this Streamlit section.
 
-# --- App Title ---
-st.title("AI Cricket Coach: Bowling Performance Lab (Single Player Analysis) 🏏")
-st.write("Upload your bowling video to get a data-driven biomechanical analysis and AI coaching feedback.")
+# ---- Streamlit App ----
+st.set_page_config(page_title="Bowling Action Analyzer", layout="wide")
 
-# --- File & Parameter Setup ---
-st.header("Your Performance Video")
-user_video_file = st.file_uploader("Upload your video", type=["mp4", "mov", "avi"], key="user")
-user_bowler_hand = st.radio("Select Your Bowling Hand", ('Right', 'Left'), key='user_hand')
+st.title("🏏 Bowling Action Analyzer")
+st.markdown("Upload a bowling action video and get an in-depth biomechanical analysis.")
 
-# --- Analysis Button ---
-if st.button("Analyze Performance", type="primary"):
-    # --- Securely get the API Key from secrets.toml ---
+# ---- API Key Config ----
+gemini_api_key = None
+secrets_file_path = "secrets.toml"
+
+if os.path.exists(secrets_file_path):
     try:
-        api_key = st.secrets["GOOGLE_API_KEY"]
-    except KeyError:
-        st.error("API Key not found. Please create a .streamlit/secrets.toml file with your GOOGLE_API_KEY.")
-        st.stop()
+        secrets = toml.load(secrets_file_path)
+        gemini_api_key = secrets.get("GEMINI_API_KEY")
+    except:
+        pass
 
-    if user_video_file:
-        output_dir = "output"
-        os.makedirs(output_dir, exist_ok=True)
-        
-        user_video_path = os.path.join(output_dir, "user_video.mp4")
-        user_csv_path = os.path.join(output_dir, "user_analysis.csv")
-        performance_graph_path = os.path.join(output_dir, "user_performance_graph.png")
-        user_annotated_video_path = os.path.join(output_dir, "user_annotated.mp4")
-        ai_report_path = os.path.join(output_dir, "user_ai_report.md")
+if gemini_api_key is None:
+    gemini_api_key = os.environ.get("GEMINI_API_KEY")
 
-        with open(user_video_path, "wb") as f:
-            f.write(user_video_file.getbuffer())
+if gemini_api_key:
+    genai.configure(api_key=gemini_api_key)
 
-        st.subheader("Processing...")
-        progress_bar = st.progress(0)
-        status_text = st.empty()
-        
-        total_steps = 4 # Reduced total steps for single video analysis
+# ---- File Upload ----
+uploaded_video = st.file_uploader("Upload a bowling video", type=["mp4", "avi", "mov"])
+bowler_hand = st.radio("Bowler Hand", ["Right", "Left"])
 
-        # 1. Process video to CSV and get detected frames
-        status_text.text('Analyzing your video and detecting key frames... (1/4)')
-        success, detected_frame_A, detected_frame_B = process_video_to_csv(
-            user_video_path, user_bowler_hand.lower(), user_csv_path
-        )
-        progress_bar.progress(1*100//total_steps)
+if uploaded_video:
+    # Save uploaded file
+    video_path = os.path.join("videos", uploaded_video.name)
+    os.makedirs("videos", exist_ok=True)
+    with open(video_path, "wb") as f:
+        f.write(uploaded_video.read())
 
-        if not success:
-            st.error("Video processing failed. Could not extract pose data.")
-            st.stop()
+    st.video(video_path)
 
-        # 2. Generate performance graph
-        status_text.text('Generating your performance graph... (2/4)')
-        graph_success = generate_performance_graph(user_csv_path, performance_graph_path)
-        progress_bar.progress(2*100//total_steps)
-        if not graph_success:
-            st.warning("Could not generate performance graph. Data might be insufficient.")
+    if st.button("🔍 Run Analysis"):
+        with st.spinner("Processing video... this may take a while ⏳"):
+            OUTPUT_DIR = "output_analysis"
+            os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-        # 3. Generate annotated video with highlighted frames
-        status_text.text('Generating your annotated video... (3/4)')
-        annotated_video_success = generate_annotated_video(
-            user_video_path, user_csv_path, user_annotated_video_path, user_bowler_hand.lower(),
-            detected_frame_A=detected_frame_A, detected_frame_B=detected_frame_B
-        )
-        progress_bar.progress(3*100//total_steps)
-        if not annotated_video_success:
-            st.warning("Could not generate annotated video. Video file or pose data might be problematic.")
-        
-        # 4. Generate AI coaching report
-        status_text.text('Generating AI coaching report with Gemini... (4/4)')
-        # IMPORTANT: generate_generative_ai_feedback now expects only user_csv_path, api_key, detected_frame_A, detected_frame_B
-        ai_report = generate_generative_ai_feedback(
-            user_csv_path, api_key,
-            detected_frame_A=detected_frame_A,
-            detected_frame_B=detected_frame_B
-        )
-        progress_bar.progress(4*100//total_steps)
-        
-        with open(ai_report_path, "w") as f:
-            f.write(ai_report)
-        
-        status_text.success("Analysis Complete!")
-        time.sleep(2) # Give user time to read success message
-        progress_bar.empty()
-        status_text.empty()
+            # ---------------- Run your pipeline (main loop from your script) ----------------
+            # Collect landmark data into dataframe (adapted from your main())
+            mp_pose = mp.solutions.pose
+            pose = mp_pose.Pose(static_image_mode=False, min_detection_confidence=0.5, min_tracking_confidence=0.5)
 
-        # --- Display Results ---
-        st.header("Analysis Results")
-        
-        st.subheader("Your Performance Analysis")
-        # Ensure the annotated video exists before trying to display it
-        if os.path.exists(user_annotated_video_path):
-            st.video(user_annotated_video_path)
-        else:
-            st.error("Annotated video could not be generated or found.")
+            cap = cv2.VideoCapture(video_path)
+            frame_data_list = []
+            frame_count = 0
+            frames = []
 
-        st.subheader("Performance Graph")
-        # Ensure the graph image exists before trying to display it
-        if os.path.exists(performance_graph_path):
-            st.image(performance_graph_path)
-        else:
-            st.error("Performance graph could not be generated or found.")
-        
-        st.subheader("AI-Generated Coaching Report")
-        st.markdown(ai_report)
+            while cap.isOpened():
+                ret, frame = cap.read()
+                if not ret:
+                    break
 
-    else:
-        st.error("Please upload your video file to proceed.")
+                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                results = pose.process(rgb_frame)
+                if results.pose_landmarks:
+                    landmarks = results.pose_landmarks.landmark
+                    # Example features – extend with all angles you compute
+                    frame_data_list.append({
+                        "frame": frame_count,
+                        "right_wrist_y": landmarks[mp_pose.PoseLandmark.RIGHT_WRIST.value].y,
+                        "nose_y": landmarks[mp_pose.PoseLandmark.NOSE.value].y,
+                        # ... include all required angles here ...
+                    })
+                frame_count += 1
+                frames.append(frame)
+
+            cap.release()
+            df = pd.DataFrame(frame_data_list)
+
+            # Detect key frames
+            frame_A = find_arm_head_level_frame_A(df)
+            frame_B = find_strict_release_frame_B(df)
+
+            # Save snapshots
+            snapshot_A_path = os.path.join(OUTPUT_DIR, "snapshot_A.jpg")
+            snapshot_B_path = os.path.join(OUTPUT_DIR, "snapshot_B.jpg")
+            if 0 <= frame_A < len(frames):
+                Image.fromarray(cv2.cvtColor(frames[frame_A], cv2.COLOR_BGR2RGB)).save(snapshot_A_path)
+            if 0 <= frame_B < len(frames):
+                Image.fromarray(cv2.cvtColor(frames[frame_B], cv2.COLOR_BGR2RGB)).save(snapshot_B_path)
+
+            # Graph
+            graph_path = os.path.join(OUTPUT_DIR, "performance_graph.png")
+            generate_performance_graph(df, graph_path, detected_frame_A=frame_A, detected_frame_B=frame_B)
+
+            # Annotated video
+            annotated_video_path = os.path.join(OUTPUT_DIR, "annotated_video.mp4")
+            generate_annotated_video(video_path, annotated_video_path, bowler_hand, frame_A, frame_B, df)
+
+            # AI Feedback (if key found)
+            report_path = os.path.join(OUTPUT_DIR, "ai_report.txt")
+            if gemini_api_key:
+                generate_generative_ai_feedback(
+                    bowler_hand, 
+                    df[df["frame"] == frame_A].iloc[0], 
+                    df[df["frame"] == frame_B].iloc[0], 
+                    snapshot_A_path, 
+                    snapshot_B_path, 
+                    graph_path, 
+                    report_path
+                )
+
+        # ---- Display results ----
+        st.success("✅ Analysis complete!")
+
+        col1, col2 = st.columns(2)
+        with col1:
+            st.image(snapshot_A_path, caption="Frame A: Arm-Head Level")
+        with col2:
+            st.image(snapshot_B_path, caption="Frame B: Release Point")
+
+        st.image(graph_path, caption="Performance Graph")
+        st.video(annotated_video_path)
+
+        if os.path.exists(report_path):
+            with open(report_path, "r") as f:
+                report_content = f.read()
+            st.subheader("📋 AI Analysis Report")
+            st.markdown(report_content)
+
