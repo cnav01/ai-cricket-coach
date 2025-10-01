@@ -1,40 +1,34 @@
-import sys, os
-
-# Add the project root (ai-cricket-coach) to sys.path
-project_root = os.path.dirname(os.path.abspath(__file__))
-if project_root not in sys.path:
-    sys.path.insert(0, project_root)
-
 import streamlit as st
+import os
 import time
-import cv2 # Keep cv2 import here for reading frames directly
-import numpy as np # Keep numpy here for general array ops
-import pandas as pd # Keep pandas here for DataFrame ops
-from PIL import Image # Keep PIL here for image loading
+import cv2
+import numpy as np
+import pandas as pd
+import tempfile
+import shutil
+from PIL import Image
 
-# Import specific functions and constants from your new pipeline script
+# Import specific functions, objects, and constants directly from your pipeline script
 from scripts.cricket_analysis_pipeline import (
-    get_mediapipe_pose_model, # Caching moved here
+    pose,         
+    mp_pose,      
     calculate_angle_2d,
     calculate_arm_vertical_angle,
     calculate_arm_horizontal_angle,
     find_arm_head_level_frame_A,
     find_strict_release_frame_B,
     generate_performance_graph,
-    generate_annotated_video,
-    generate_generative_ai_feedback, # Modified to accept api_key
-    mp_pose, # Need mp_pose object for landmarks
-    mp_drawing, # Need mp_drawing object for drawing
+    generate_annotated_video, 
+    generate_generative_ai_feedback,
+
+    # All your constants
     SNAPSHOT_FILENAME_A,
     SNAPSHOT_FILENAME_B,
     PERFORMANCE_GRAPH_FILENAME,
-    ANNOTATED_VIDEO_FILENAME,
+    ANNOTATED_VIDEO_FILENAME, 
     AI_REPORT_FILENAME,
-    ANALYSIS_CSV_PATH # Although we'll build the path dynamically, good to have filename
+    ANALYSIS_CSV_FILENAME 
 )
-
-# Initialize MediaPipe Pose Model (cached by Streamlit)
-pose = get_mediapipe_pose_model()
 
 # --- Page Configuration ---
 st.set_page_config(
@@ -52,20 +46,31 @@ st.sidebar.header("Upload Video & Settings")
 uploaded_file = st.sidebar.file_uploader("Upload your bowling video (MP4)", type=["mp4", "mov", "avi"])
 bowler_hand_display = st.sidebar.selectbox("Bowler Hand", ["Right-handed", "Left-handed"], index=0)
 
-# Map bowler_hand for internal logic (your pipeline currently assumes 'right', adjust if 'left' support is added)
-# For the current pipeline, 'right' for all calculations is hardcoded for the bowling arm.
-# If you want to switch arms based on `bowler_hand_display`, you need to modify your pipeline functions
-# (e.g., `find_arm_head_level_frame_A`, `find_strict_release_frame_B`, and the landmark extraction loop)
-# to dynamically select RIGHT_ELBOW/LEFT_ELBOW etc.
-# For now, we'll proceed assuming the pipeline functions internally use RIGHT for bowling arm
-# and LEFT for front leg brace. If you select "Left-handed" as the user, it mainly affects the AI prompt
-# and a hypothetical future update where the landmark selection in the pipeline becomes dynamic.
 internal_bowler_hand = "right" if bowler_hand_display == "Right-handed" else "left"
 
+# --- Cleanup Logic (NEW) ---
+if "temp_dir_to_clean" not in st.session_state:
+    st.session_state.temp_dir_to_clean = None
+
+# If there's an old temp dir to clean, do it on the next rerun
+if st.session_state.temp_dir_to_clean and os.path.exists(st.session_state.temp_dir_to_clean):
+    try:
+        shutil.rmtree(st.session_state.temp_dir_to_clean, ignore_errors=True)
+        print(f"Cleaned up old temporary directory: {st.session_state.temp_dir_to_clean}")
+    except Exception as e:
+        print(f"Error during cleanup of old temporary directory {st.session_state.temp_dir_to_clean}: {e}")
+    st.session_state.temp_dir_to_clean = None # Reset after cleanup
+
+# Initialize variables that will hold paths/content if analysis succeeds
+annotated_video_path_for_display = None # Will store actual path
+annotated_video_bytes_for_display = None 
+analysis_csv_path_for_download = None
+ai_report_path_for_download = None # Will store actual path
+ai_report_content_for_display = None 
+temp_dir = None 
 
 # --- Analysis Button ---
 if st.button("Start Analysis", type="primary"):
-    # --- Securely get the API Key from secrets.toml ---
     try:
         api_key = st.secrets["GOOGLE_API_KEY"]
     except KeyError:
@@ -73,21 +78,25 @@ if st.button("Start Analysis", type="primary"):
         st.stop()
 
     if uploaded_file is not None:
-        st.video(uploaded_file, caption="Your uploaded video.")
+        st.video(uploaded_file)
+        st.caption("Your Uploaded Video")
 
-        # Create a temporary directory for outputs
-        with tempfile.TemporaryDirectory() as temp_dir:
+        try:
+            # Create a NEW temp directory and store its path for future cleanup
+            temp_dir = tempfile.mkdtemp()
+            st.session_state.temp_dir_to_clean = temp_dir # Store for next rerun's cleanup
+            
             video_path = os.path.join(temp_dir, uploaded_file.name)
             with open(video_path, "wb") as f:
                 f.write(uploaded_file.getbuffer())
 
             # Define output paths within the temporary folder
-            output_dir = temp_dir # Use the temp_dir as the base output directory
+            output_dir = temp_dir 
             snapshot_output_dir = os.path.join(output_dir, 'snapshots')
             graph_output_dir = os.path.join(output_dir, 'graphs')
             annotated_video_output_dir = os.path.join(output_dir, 'annotated_videos')
             report_output_dir = os.path.join(output_dir, 'reports')
-            analysis_csv_path = os.path.join(output_dir, 'analysis_data.csv') # Using the pipeline's constant filename
+            analysis_csv_path_internal = os.path.join(output_dir, ANALYSIS_CSV_FILENAME) 
 
             # Ensure all sub-directories exist
             for d in [snapshot_output_dir, graph_output_dir, annotated_video_output_dir, report_output_dir]:
@@ -97,8 +106,6 @@ if st.button("Start Analysis", type="primary"):
             progress_bar = st.progress(0)
             status_text = st.empty()
             
-            # Estimate total steps for the progress bar
-            # 1 for video processing, 2 for detection, 1 for graph, 1 for annotated video, 1 for AI report = 6 steps
             total_progress_steps = 6 
             current_progress_step = 0
 
@@ -112,7 +119,7 @@ if st.button("Start Analysis", type="primary"):
 
             frame_data_list = []
             frame_count = 0
-            all_frames = [] # To store frames for saving snapshots later
+            all_frames = [] 
 
             total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
             if total_frames == 0:
@@ -128,7 +135,6 @@ if st.button("Start Analysis", type="primary"):
                     all_frames.append(frame.copy()) 
 
                     image_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                    # Use the imported pose model
                     results = pose.process(image_rgb) 
 
                     frame_dict = {'frame': frame_count}
@@ -137,9 +143,8 @@ if st.button("Start Analysis", type="primary"):
                         landmarks = results.pose_landmarks.landmark
                         landmarks_3d = results.pose_world_landmarks.landmark
                         
-                        # Assuming right-handed bowler for landmark extraction as per pipeline's current logic
                         right_shoulder_3d = landmarks_3d[mp_pose.PoseLandmark.RIGHT_SHOULDER]
-                        right_elbow_3d = landmarks_3d[mp_pose.PoseLandmark.RIGHT_ELBOW]
+                        right_elbow_3d = landmarks_3d[mp_pose.PoseLandmark.RIGHT_ELBOW] 
                         right_wrist_3d = landmarks_3d[mp_pose.PoseLandmark.RIGHT_WRIST]
                         left_hip_3d = landmarks_3d[mp_pose.PoseLandmark.LEFT_HIP]
                         left_knee_3d = landmarks_3d[mp_pose.PoseLandmark.LEFT_KNEE]
@@ -193,17 +198,18 @@ if st.button("Start Analysis", type="primary"):
                         frame_data_list.append(frame_dict)
 
                     frame_count += 1
-                    # Update progress bar
                     if total_frames > 0:
                         progress_bar.progress(int((frame_count / total_frames) * (100 / total_progress_steps)))
 
+            cap.release() 
 
-            cap.release()
             df = pd.DataFrame(frame_data_list)
             df.fillna(method='ffill', inplace=True)
             df.fillna(method='bfill', inplace=True)
             df.fillna(0, inplace=True) 
-            df.to_csv(analysis_csv_path, index=False)
+            df.to_csv(analysis_csv_path_internal, index=False)
+            analysis_csv_path_for_download = analysis_csv_path_internal 
+
             current_progress_step += 1
             progress_bar.progress(current_progress_step * 100 // total_progress_steps)
             status_text.text(f"Processed video data. ({current_progress_step}/{total_progress_steps})")
@@ -268,9 +274,9 @@ if st.button("Start Analysis", type="primary"):
 
             cols = st.columns(2)
             if snapshot_A_full_path and os.path.exists(snapshot_A_full_path):
-                cols[0].image(Image.open(snapshot_A_full_path), caption=f"Frame A: Arm-Head Level (Frame {detected_frame_A})", use_column_width=True)
+                cols[0].image(Image.open(snapshot_A_full_path), caption=f"Frame A: Arm-Head Level (Frame {detected_frame_A})", use_container_width=True)
             if snapshot_B_full_path and os.path.exists(snapshot_B_full_path):
-                cols[1].image(Image.open(snapshot_B_full_path), caption=f"Frame B: Strict Release (Frame {detected_frame_B})", use_column_width=True)
+                cols[1].image(Image.open(snapshot_B_full_path), caption=f"Frame B: Strict Release (Frame {detected_frame_B})", use_container_width=True)
             
             current_progress_step += 1
             progress_bar.progress(current_progress_step * 100 // total_progress_steps)
@@ -282,79 +288,104 @@ if st.button("Start Analysis", type="primary"):
             graph_path = os.path.join(graph_output_dir, PERFORMANCE_GRAPH_FILENAME)
             generate_performance_graph(df, graph_path, detected_frame_A, detected_frame_B)
             if os.path.exists(graph_path):
-                st.image(graph_path, caption="Key Angles Over Time", use_column_width=True)
+                st.image(Image.open(graph_path), caption="Key Angles Over Time", use_container_width=True)
             else:
                 st.error("Failed to generate performance graph.")
             current_progress_step += 1
             progress_bar.progress(current_progress_step * 100 // total_progress_steps)
             status_text.text(f"Performance graph generated. ({current_progress_step}/{total_progress_steps})")
 
-
             # --- Step 5: Generate Annotated Video ---
             status_text.text(f'Generating annotated video... ({current_progress_step+1}/{total_progress_steps})')
-            annotated_video_path = os.path.join(annotated_video_output_dir, ANNOTATED_VIDEO_FILENAME)
+            annotated_video_path_for_display = os.path.join(annotated_video_output_dir, ANNOTATED_VIDEO_FILENAME)
             with st.spinner("Creating annotated video (this might take a few minutes for long videos)..."):
-                # Pass the dynamically determined internal_bowler_hand
                 success_video = generate_annotated_video(
-                    video_path, annotated_video_path, internal_bowler_hand, 
+                    video_path, annotated_video_path_for_display, internal_bowler_hand, 
                     detected_frame_A, detected_frame_B, analysis_df=df
                 )
-            if success_video and os.path.exists(annotated_video_path):
-                st.video(annotated_video_path, format="video/mp4", start_time=0)
-                st.download_button(
-                    label="Download Annotated Video",
-                    data=open(annotated_video_path, "rb").read(),
-                    file_name=ANNOTATED_VIDEO_FILENAME,
-                    mime="video/mp4"
-                )
-            else:
-                st.error("Failed to generate annotated video. Please check the video format or content.")
+            
             current_progress_step += 1
             progress_bar.progress(current_progress_step * 100 // total_progress_steps)
             status_text.text(f"Annotated video generated. ({current_progress_step}/{total_progress_steps})")
 
+            # --- Read Annotated Video into Bytes and Display ---
+            if annotated_video_path_for_display and os.path.exists(annotated_video_path_for_display):
+                with open(annotated_video_path_for_display, "rb") as f:
+                    annotated_video_bytes_for_display = f.read() # Read the bytes here
+                st.subheader("Annotated Video Playback")
+                # Pass bytes directly to st.video
+                st.video(annotated_video_bytes_for_display, format="video/mp4", start_time=0)
+                st.download_button(
+                    label="Download Annotated Video",
+                    data=annotated_video_bytes_for_display, # Use the bytes for download button
+                    file_name=ANNOTATED_VIDEO_FILENAME,
+                    mime="video/mp4"
+                )
+            else:
+                st.error("Annotated video file not found after generation.")
+            # ------------------------------------
 
             # --- Step 6: Generate Gemini AI Feedback ---
             st.subheader("AI Coaching Feedback")
             status_text.text(f'Generating AI coaching report with Gemini... ({current_progress_step+1}/{total_progress_steps})')
-            ai_report_path = os.path.join(report_output_dir, AI_REPORT_FILENAME)
+            ai_report_path_for_download = os.path.join(report_output_dir, AI_REPORT_FILENAME)
             
             if snapshot_A_full_path and snapshot_B_full_path and os.path.exists(graph_path):
-                frame_A_data = df[df['frame'] == detected_frame_A].iloc[0].to_dict() # Convert to dict for easier passing
+                frame_A_data = df[df['frame'] == detected_frame_A].iloc[0].to_dict()
                 frame_B_data = df[df['frame'] == detected_frame_B].iloc[0].to_dict()
                 
                 ai_success = generate_generative_ai_feedback(
                     internal_bowler_hand, frame_A_data, frame_B_data, 
                     snapshot_A_full_path, snapshot_B_full_path, 
-                    graph_path, ai_report_path, api_key # Pass the API key
+                    graph_path, ai_report_path_for_download, api_key 
                 )
-                if ai_success and os.path.exists(ai_report_path):
-                    with open(ai_report_path, "r") as f:
-                        st.markdown(f.read())
-                    st.download_button(
-                        label="Download AI Coaching Report",
-                        data=open(ai_report_path, "rb").read(),
-                        file_name=AI_REPORT_FILENAME,
-                        mime="text/plain"
-                    )
+                
+                # --- Read the AI report content *before* temp dir cleanup ---
+                if os.path.exists(ai_report_path_for_download):
+                    with open(ai_report_path_for_download, "r", encoding="utf-8") as f:
+                        ai_report_content_for_display = f.read()
                 else:
-                    st.error("Failed to generate AI coaching feedback. This might be due to API issues or a problem with input files.")
+                    ai_report_content_for_display = "## AI Coaching Feedback - File Not Found\n\n" \
+                                                  "The AI report was expected to be generated but could not be found. Check terminal for Gemini API errors."
             else:
                 st.warning("Skipping AI report generation due to missing snapshots or graph files.")
+                ai_report_content_for_display = "## AI Coaching Feedback - Skipped\n\n" \
+                                              "AI report generation was skipped because key input files (snapshots or graph) were missing."
             
             current_progress_step += 1
             progress_bar.progress(current_progress_step * 100 // total_progress_steps)
             status_text.text(f"AI coaching report generated. ({current_progress_step}/{total_progress_steps})")
 
-            progress_bar.empty()
-            status_text.success("Analysis Complete!")
-            st.balloons() # Celebrate completion
+            pose.close() 
+            time.sleep(0.1) 
 
-            # Optional: Download raw analysis data
+            # --- Display AI Report CONTENT here ---
+            if ai_report_content_for_display:
+                st.markdown(ai_report_content_for_display)
+                # Only offer download if the original file path exists, though content is in memory
+                if ai_report_path_for_download and os.path.exists(ai_report_path_for_download): 
+                     st.download_button(
+                        label="Download AI Coaching Report",
+                        data=ai_report_content_for_display.encode("utf-8"), # Encode the string data
+                        file_name=AI_REPORT_FILENAME,
+                        mime="text/plain"
+                    )
+
+        except Exception as e:
+            st.error(f"An error occurred during analysis: {e}")
+            import traceback
+            st.exception(e) 
+        finally:
+            # --- IMPORTANT: REMOVED shutil.rmtree(temp_dir) from here ---
+            # Cleanup is now handled by the session_state logic at the top of the script
+            pass # No direct cleanup in finally anymore
+
+        # Download raw analysis data - This can stay here
+        if analysis_csv_path_for_download and os.path.exists(analysis_csv_path_for_download):
             st.download_button(
                 label="Download Full Analysis Data (CSV)",
-                data=open(analysis_csv_path, "rb").read(),
-                file_name=os.path.basename(analysis_csv_path), # Get just the filename
+                data=open(analysis_csv_path_for_download, "rb").read(),
+                file_name=ANALYSIS_CSV_FILENAME,
                 mime="text/csv"
             )
 
