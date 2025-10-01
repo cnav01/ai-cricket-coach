@@ -1,5 +1,3 @@
-Ignore the Streamlit secrets file
-.streamlit/secrets.toml
 
 Ignore Python cache files
 pycache/
