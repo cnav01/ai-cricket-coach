@@ -1,5 +1,11 @@
+import sys, os
+
+# Add the project root (ai-cricket-coach) to sys.path
+project_root = os.path.dirname(os.path.abspath(__file__))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
+
 import streamlit as st
-import os
 import time
 import cv2 # Keep cv2 import here for reading frames directly
 import numpy as np # Keep numpy here for general array ops
